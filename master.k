@@ -5,7 +5,7 @@
 /               T=terminal basket levels  Rf=basket path matrix  W=risk flag
 
 / -- config: J=payload, G pulls a string key, F is the empty-safe float cast
-C:100.0;Y:365.0;J:`j?1:"json.json";mgOn:|/`margin=!J;pj:J@`platform;tj:J@`data;cj:J@`$"coupon_config";AC:J@`Autocall;aj:J@`$"Autocall_Coupon";G:{[d;k]d@`$k};F:{$[(@x)~`C;$[0=#x;0.0;`f$. x];`f$x]};so:G[pj;"Solve for"];rf2:F G[pj;"Reoffer (%)"]
+C:100.0;Y:365.0;J:`j?1:"json.json";mgOn:|/`margin=!J;mgSkip:$[mgOn;|/`gcache=!J@`margin;0b];pj:J@`platform;tj:J@`data;cj:J@`$"coupon_config";AC:J@`Autocall;aj:J@`$"Autocall_Coupon";G:{[d;k]d@`$k};F:{$[(@x)~`C;$[0=#x;0.0;`f$. x];`f$x]};so:G[pj;"Solve for"];rf2:F G[pj;"Reoffer (%)"]
 mg:F pj@`$"Issuer Margin (%)";un:G[tj;"Underlying"];SP:`f$G[tj;"Spot Price"];nU:#un;w:G[tj;"Basket Type"];N:`f$G[tj;"Notional"];E:`i$G[tj;"Days"];dt:1.0%Y;sd:%dt;vo:`f$G[tj;"Volatility"];be:`f$G[tj;"Skew Beta"]
 R:`f$G[tj;"Risk-Free Rate"];ba:G[tj;"Barrier Type"];k0:F G[tj;"KI Barrier (%)"];p0:F G[tj;"Put Strike (%)"];le:G[tj;"Leverage (%)"];on:G[tj;"One Star"];ol:F G[tj;"One Star Level (%)"];cg:G[tj;"Capital Guaranteed"];dj:G[tj;"Dividends"]
 gv:$[^gg:J@`$"Capital Guarantee Level (%)";C;F gg];n:`i$J@`$"n_sims";sm:$[|/(`$"spot_mult")=!J;(nU#1.0)*`f$J@`$"spot_mult";nU#1.0];vd:$[|/(`$"vol_add")=!J;`f$J@`$"vol_add";0.0];rd2:$[|/(`$"rf_add")=!J;`f$J@`$"rf_add";0.0];R:R+rd2;sp:SP*sm
@@ -16,7 +16,7 @@ ia2:(ba~"American Daily Close")|ba~"American Intraday";ip:ia2|~(AC@`Type)~"None"
 / -- qf: dividend pv -> flat yield; qm..qn: shared Lehmer LCG + Box-Muller
 /    (bit-identical to engine.py's _QSRng, so both engines draw the same paths)
 dy:`f${x@`$"days_to_pay"}'dj;qf:{[i]pv:+/(di=i)*dm*`exp[-R*dy%Y];$[pv>0;(-`ln 1.0-pv%qP[i])%(E%Y);0.0]};qm:2147483647;qb:65536;qp:1_qb{qm!x*48271}\1;qt:42;qk:{[k]b:qm!qt*k#qp;qt::*|b;b};qz:{[m]f:`i$_m%qb;r:m-f*qb;(f#qb),$[r>0;,r;!0]}
-qu:{[m](`f$,/qk'qz m)%qm};qn:{[m]u1:qu m;u2:qu m;(%-2.0*`ln u1)*`cos[6.283185307179586*u2]};hZ:(@J@`$"_Z")~`A;Z0:$[hZ;{(#x;#*x)#,/`f$'x}'J@`$"_Z";{(n;E)#qn n*E}'!nU]
+qu:{[m](`f$,/qk'qz m)%qm};qn:{[m]u1:qu m;u2:qu m;(%-2.0*`ln u1)*`cos[6.283185307179586*u2]};hZ:(@J@`$"_Z")~`A;Z0:$[mgSkip;0;$[hZ;{(#x;#*x)#,/`f$'x}'J@`$"_Z";{(n;E)#qn n*E}'!nU]]
 
 / -- simulation: st2 = one local-vol step, sP path-dependent / sE European;
 /    SS regenerates globals A0/M0/Rf/T/rm/mx for a given spot/vol/q set
@@ -25,7 +25,7 @@ sA:{[i]V::gV[i];B::be[i];S0::gS[i];Q::gQ[i];vB::V+B;b0::B%SP[i];rq::R-Q;$[ip;sP 
 SS:{[sv;vv;qv]A0::mA[sv;vv;qv];M0::nk'!nU;Rf::$[(nU=1)|w~"None";M0 0;w~"Worst-Of";&/M0;(+/M0)%nU];T::Rf[;E];rm::&/'Rf;mx::|/{M0[x][;E]}'!nU}
 
 / base paths (spot_mult / vol_add overrides applied here)
-qP:sp;qy:qf'!nU;SS[sp;vo+vd;qy]
+qP:sp;qy:qf'!nU;dz:$[mgSkip;0;SS[sp;vo+vd;qy]]
 
 / -- schedules: br2 = banker's rounding, ob = autocall observation days
 fq:{$[x~"Monthly";12;x~"Quarterly";4;x~"SemiAnnually";2;x~"Yearly";1;1]};br2:{f:`i$_x;d:x-f;$[d<0.5;f;d>0.5;f+1;0=2!f;f;f+1]};cf:fq cj@`$"Coupon Frequency";im:(cj@`$"Coupon Frequency")~"At Maturity";ct:cj@`$"Coupon Type"
@@ -57,7 +57,7 @@ tl:1e-7;sb:1;bs2:{[l;h;fl;fh]d:fh-fl;sx:$[0.0=d;.5*l+h;h-fh*(h-l)%d];$[(sx>l)&sx
 sw:{[k;t3;lo;hi]sg::k;tg::t3;fl:(pw[k;lo])-t3;fh:(pw[k;hi])-t3;$[(0.0<fl)~0.0<fh;[sb::0;$[(fl*fl)<fh*fh;lo;hi]];(bp/(lo;hi;fl;fh))0]};sR:{[]t3:N*(rf2-mg)%C;sv:sw[sk;t3;0.0001;200.0];q:pb;q[sk]:sv;`PV`Solved!(C*(pp[q])%N;sv)}
 
 / -- headline result rs; greeks flag gates: W legs+risk, g2 basket, dl per-asset
-pR:{[]px:C*(pp[pb])%N;`PV`Solved!(px;px+mg)};rs:$[so~"Reoffer (%)";pR[];sR[]];gk2:$[mgOn;3;$[^gk:J@`greeks;0;`i$F gk]];W:gk2>0;g2:gk2>1;dl:gk2>2;qo:pb;qo:$[sk~`none;qo;@[qo;sk;:;rs`Solved]];pf2:{[]C*(pp[qo])%N};pv2:C*(pp[qo])%N
+pR:{[]px:C*(pp[pb])%N;`PV`Solved!(px;px+mg)};rs:$[mgSkip;`PV`Solved!(0.0;0.0);$[so~"Reoffer (%)";pR[];sR[]]];gk2:$[mgSkip;0;$[mgOn;3;$[^gk:J@`greeks;0;`i$F gk]]];W:gk2>0;g2:gk2>1;dl:gk2>2;qo:pb;qo:$[sk~`none;qo;@[qo;sk;:;rs`Solved]];pf2:{[]C*(pp[qo])%N};pv2:$[mgSkip;0.0;C*(pp[qo])%N]
 
 / -- per-path vectors at the solved params -> probabilities, VaR/ES, P&L stats
 aB:$[W;aL qo;0];mv:$[W;aB 0;0];ag:$[W;aB 1;0];av2:$[W;aB 2;0];cv2:$[W;cV[qo;mv];0];pu2:$[W;pV[qo;ag];0];bv2:$[W;bV[mv;ag];0];pn:$[W;bv2+cv2+av2-pu2;0];bw2:$[W;$[on~"Yes";(kR qo`ki)&mx<ol;kR qo`ki];0];pt:{[x;p]h:(p%C)*-1+#x;i:`i$_h;$[i<-1+#x;x[i]+(h-i)*x[i+1]-x[i];x@i]};pa:$[W;(+/`f$ag)%n;0n]
@@ -72,7 +72,7 @@ dA:$[g2;(du-dn)%2.0;0n];gu:$[g2;uS[nU#1.05];0n];gd:$[g2;uS[nU#0.95];0n];gA:$[g2;
 dv2:$[dl;{[i]((uS oh[i;1.01])-uS oh[i;0.99])%2.0}'!nU;0n];vv2:$[dl;{[i]((uV @[nU#0.0;i;:;0.01])-uV @[nU#0.0;i;:;-0.01])%2.0}'!nU;0n]
 
 / restore base paths after the greek bumps
-qP:sp;SS[sp;vo+vd;qy]
+qP:sp;dz:$[mgSkip;0;SS[sp;vo+vd;qy]]
 
 / -- theta: 1-day time decay. CRN => Days-1 paths are the base paths truncated by
 /    one column, so reprice on the restored base Rf/M0 at maturity Em-1 (no re-sim).
@@ -94,14 +94,17 @@ mgP:$[mgOn;J@`margin;(,`zz)!,0.0];mgh:{[k;d]$[|/(`$k)=!mgP;mgP@`$k;d]};mgf:{[k;d
 ppf:{[p]zA:-39.69683028665376 220.9460984245205 -275.9285104469687 138.3577518672690 -30.66479806614716 2.506628277459239;zB:-54.47609879822406 161.5858368580409 -155.6989798598866 66.80131188771972 -13.28068155288572 1.0;zC:-0.007784894002430293 -0.3223964580411365 -2.400758277161838 -2.549732539343734 4.374664141464968 2.938163982698783;zD:0.007784695709041462 0.3224671290700398 2.445134137142996 3.754408661907416 1.0;hr:{[co;x]{[x;a;c]c+x*a}[x]/[co]};$[~p>0.0;-1e18;~p<1.0;1e18;p<0.02425;[q:%(-2.0*`ln p);(hr[zC;q])%hr[zD;q]];~p>0.97575;[q:p-0.5;r:q*q;(q*hr[zA;r])%hr[zB;r]];[q:%(-2.0*`ln[1.0-p]);(-(hr[zC;q])%hr[zD;q])]]}
 mPct:{[x;q]pt[x@<x;q]};wrst:{[x;cf](mPct[x;cf])|(-mPct[x;100.0-cf])};mkL:{[f;g;m;c;ch](`$("factor";"greek";"mult";"charge";"charged"))!(f;g;m;c;ch)};tmn:{[p;t;n]$[n>0;(-+/p@&t)%n;0.0]}
 S:(,`mNot)!,$[(mgf["notional";0.0])>0.0;mgf["notional";0.0];N]
+S:S,(,`gkc)!,mgh["gcache";()!()]
 S:S,(,`usePer)!,nU>1
 S:S,(,`netD)!,mgb["charge_abs_delta";1b]
-S:S,(,`gD)!,$[(S`usePer);$[(S`netD);+/dv2;($[(+/dv2)<0.0;-1.0;1.0])*+/abz dv2];dA]
+S:S,(,`dAx)!,$[mgSkip;F (S`gkc)@`delta;dA]
+S:S,(,`dv2x)!,$[mgSkip;$[nU>1;F'(S`gkc)@`$"per_asset";,S`dAx];dv2]
+S:S,(,`gD)!,$[(S`usePer);$[(S`netD);+/S`dv2x;($[(+/S`dv2x)<0.0;-1.0;1.0])*+/abz S`dv2x];S`dAx]
 S:S,(,`nFac)!,$[(S`usePer);nU;1]
-S:S,(,`gG)!,gA
-S:S,(,`gV)!,vA
-S:S,(,`gR)!,rh
-S:S,(,`gT)!,th
+S:S,(,`gG)!,$[mgSkip;F (S`gkc)@`gamma;gA]
+S:S,(,`gV)!,$[mgSkip;F (S`gkc)@`vega;vA]
+S:S,(,`gR)!,$[mgSkip;F (S`gkc)@`rho;rh]
+S:S,(,`gT)!,$[mgSkip;F (S`gkc)@`theta;th]
 S:S,(,`rvol)!,1e-6|mgf["risk_vol";vo 0]
 S:S,(,`mpor)!,0.5|mgf["mpor_days";10.0]
 S:S,(,`cfp)!,50.001|99.999&mgf["conf_pct";99.0]
@@ -213,7 +216,7 @@ dropD:(`$("gamma";"vega"))!((S`dropG);S`dropV)
 attrD:(`$("delta";"gamma";"vega";"rho";"theta"))!(S`atD;S`atG;S`atV;S`atR;S`atT)
 histD:(`$("lo";"hi";"bins";"counts";"cut"))!(S`hlo;S`hhi;S`hbn;S`hcnt;S`cutv)
 mgMul:(`$("z";"m_delta";"m_gamma";"m_vega";"m_rho";"m_delta_empirical";"m_vega_empirical";"sd_spot";"sd_vol";"risk_vol";"vol_of_vol";"rate_vol_bp";"rho_spot_vol";"mpor_days";"conf_pct";"n_sims";"seed"))!(S`zq;S`mDl;S`mGm;S`mVg;S`mRh;S`mDe;S`mVe;S`ss;S`sv;S`rvol;S`vov;S`rvb;S`rhosv;S`mpor;S`cfp;S`nsm;S`sd0)
-mgGk:(`$("delta";"gamma";"vega";"rho";"theta";"per_asset";"n_factors"))!(S`gD;S`gG;S`gV;S`gR;S`gT;$[(S`usePer);dv2;0n];S`nFac)
+mgGk:(`$("delta";"gamma";"vega";"rho";"theta";"per_asset";"n_factors"))!(S`gD;S`gG;S`gV;S`gR;S`gT;$[(S`usePer);S`dv2x;0n];S`nFac)
 sLnS:,(`$("factor";"greek";"mult";"charge";"charged"))!("notional";100.0;(S`schr)%100.0;S`schr;1)
 mSch:(`$("im_pct";"im_amount";"lines"))!(S`schr;((S`schr)%100.0)*S`mNot;sLnS)
 mSen:(`$("im_pct";"gross_pct";"lines";"dropped"))!(S`m2im;S`sGross;sLines;dropD)

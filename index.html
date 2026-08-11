@@ -598,8 +598,8 @@ select.control{appearance:none;cursor:pointer;background-image:url("data:image/s
           <div class="ab-field">
             <label>Pricing Engine</label>
             <select id="engineSel" class="control">
-              <option value="python">Python · NumPy</option>
-              <option value="kona">Kona · ngn/k native</option>
+              <option value="python">Python (NumPy)</option>
+              <option value="kona">Amber (ngn/k)</option>
               <option value="both" selected>Both · benchmark</option>
             </select>
           </div>
@@ -2158,11 +2158,11 @@ def plot_reverse_convertible_payoff():
     plt.figure(figsize=(10, 6))
 
     # Plot Capital Redemption profile
-    plt.plot(s_t_pct, redemption_payoff, label='Capital Redemption', color='#1f77b4', linewidth=2.5)
+    plt.plot(s_t_pct, redemption_payoff, label='Capital Redemption', color='#2a78d6', linewidth=2.5)
 
     # Plot Total Payout profile (Capital + Solved Coupon)
     if is_unconditional and coupon_pct > 0:
-        plt.plot(s_t_pct, total_payoff, label=f'Total Payout (Capital + {coupon_pct:.2f}% Coupon)', color='#2ca02c', linestyle='--', linewidth=2)
+        plt.plot(s_t_pct, total_payoff, label=f'Total Payout (Capital + {coupon_pct:.2f}% Coupon)', color='#1baf7a', linestyle='--', linewidth=2)
 
     # Reference baseline at 100% initial investment
     plt.axhline(100, color='gray', linestyle=':', alpha=0.7)
@@ -2251,11 +2251,11 @@ def plot_payoff_diagram():
     plt.figure(figsize=(10, 6))
 
     # Plot Capital Redemption line
-    plt.plot(s_t_pct, redemption_payoff, label='Capital Redemption', color='#1f77b4', linewidth=2.5)
+    plt.plot(s_t_pct, redemption_payoff, label='Capital Redemption', color='#2a78d6', linewidth=2.5)
 
     # Plot Total Payout line (including guaranteed coupons)
     if total_coupon > 0:
-        plt.plot(s_t_pct, total_payoff, label='Total Payout (Capital + Fixed Coupon)', color='#2ca02c', linestyle='--', linewidth=2)
+        plt.plot(s_t_pct, total_payoff, label='Total Payout (Capital + Fixed Coupon)', color='#1baf7a', linestyle='--', linewidth=2)
 
     # Reference line for initial investment (100%)
     plt.axhline(100, color='gray', linestyle=':', alpha=0.7)
@@ -2685,12 +2685,12 @@ function buildPayoffChart(cfg){
     red.push([x,rv]);
     tot.push([x,Math.max(0,Math.min(yMax,redemption(x)+totalCoupon))]);
   }
-  const series=[{label:'Capital Redemption',color:'#1f77b4',width:2.6,pts:red}];
-  if(totalCoupon>0)series.push({label:'Total Payout (+ fixed cpn)',color:'#2ca02c',width:2,dash:[6,4],pts:tot});
+  const series=[{label:'Capital Redemption',color:'#2a78d6',width:2.6,pts:red}];
+  if(totalCoupon>0)series.push({label:'Total Payout (+ fixed cpn)',color:'#1baf7a',width:2,dash:[6,4],pts:tot});
   series.push({kind:'hline',val:100,label:'Par (100%)',color:'#9aa0a6',dash:[2,3],width:1.2});
-  series.push({kind:'vline',val:put,label:'Put Strike '+put.toFixed(0)+'%',color:'#FFA500',dash:[6,5],width:1.4});
-  if(!isYield&&(acb!==100||put!==100))series.push({kind:'vline',val:acb,label:'Autocall Barrier '+acb.toFixed(0)+'%',color:'#FF0000',dash:[6,5],width:1.4});
-  if(bt!=='None'&&ki>0)series.push({kind:'vline',val:ki,label:'KI Barrier '+ki.toFixed(0)+'%',color:'#800080',dash:[6,5],width:1.4});
+  series.push({kind:'vline',val:put,label:'Put Strike '+put.toFixed(0)+'%',color:'#eda100',dash:[6,5],width:1.4});
+  if(!isYield&&(acb!==100||put!==100))series.push({kind:'vline',val:acb,label:'Autocall Barrier '+acb.toFixed(0)+'%',color:'#e34948',dash:[6,5],width:1.4});
+  if(bt!=='None'&&ki>0)series.push({kind:'vline',val:ki,label:'KI Barrier '+ki.toFixed(0)+'%',color:'#4a3aa7',dash:[6,5],width:1.4});
   QSIChart.mount(cv,'payoff',{
     x0:0,x1:xMax,y0:0,y1:yMax,
     title:isYield?'Payoff Diagram Reverse Convertible':'Payoff Diagram',
@@ -2738,7 +2738,7 @@ function drawPayoff(cfg){
   }
 
   // matplotlib palette (exact colours used in your plot_* functions)
-  const C_RED='#1f77b4', C_TOT='#2ca02c', C_STRIKE='#FFA500', C_AC='#FF0000', C_KI='#800080', C_GRID=line, C_GRAY='#9aa0a6';
+  const C_RED='#2a78d6', C_TOT='#1baf7a', C_STRIKE='#eda100', C_AC='#e34948', C_KI='#4a3aa7', C_GRID=line, C_GRAY='#9aa0a6';
   const fmt=v=>Number.isInteger(v)?(''+v):(''+(+v));
 
   const xMax=isYield?150:140, yMax=isYield?160:150;
@@ -2998,7 +2998,7 @@ async function runKonaEngine(cfg,nsims){
   const solveFor=cfg.platform['Solve for'];
   const fair=+r.PV;
   const big=(solveFor==='Reoffer (%)')?fair:+r.Solved;
-  return {engine:'Kona',native:(r.engine==='ngn/k'),big,fair,
+  return {engine:'Amber',native:(r.engine==='ngn/k'||r.engine==='amber'||r.engine==='amber-wasm'),big,fair,
           solved:(solveFor==='Reoffer (%)'?null:+r.Solved),ms:r.ms,solveFor,full:r};
 }
 
@@ -3017,9 +3017,9 @@ async function runPythonEngine(cfg,nsims){
 function benchCell(el,res,fastest){
   if(!res){el.className='bench-cell empty';el.innerHTML='<div class="bench-eng">—</div><div class="bench-big">--</div>';return;}
   const speed=fastest?Math.max(8,Math.round(100*fastest/res.ms)):100;
-  const tag=res.engine==='Kona'?(res.native===false?'python fallback':'ngn/k · native'):'NumPy · server';
+  const label=(res.engine==='Amber'||res.engine==='Kona')?'Amber (ngn/k)':(res.engine==='Python'?'Python (NumPy)':res.engine);
   el.className='bench-cell';
-  el.innerHTML=`<div class="bench-eng">${res.engine}<span class="badge">${tag}</span></div>`+
+  el.innerHTML=`<div class="bench-eng">${label}</div>`+
     `<div class="bench-big">${res.big==null?'--':res.big.toFixed(4)}<span class="u">${res.solveFor.includes('%')?'%':''}</span></div>`+
     `<div class="bench-row"><span>compute time</span><b>${res.ms.toFixed(0)} ms</b></div>`+
     `<div class="bench-bar"><i style="width:${speed}%"></i></div>`+
@@ -3033,7 +3033,7 @@ function renderBench(py,ko){
   if(py&&ko&&py.big!=null&&ko.big!=null){
     const d=Math.abs(py.big-ko.big), bps=d*100;
     const ok=d<0.8;
-    const fast=py.ms<ko.ms?'Python':'Kona', ratio=Math.max(py.ms,ko.ms)/Math.max(1,Math.min(py.ms,ko.ms));
+    const fast=py.ms<ko.ms?'Python':'Amber', ratio=Math.max(py.ms,ko.ms)/Math.max(1,Math.min(py.ms,ko.ms));
     mm.className=ok?'match-ok':'match-warn';
     mm.textContent=(ok?'\u2713 Engines agree':'\u26a0 \u0394 high — raise paths')+`  \u00b7 \u0394 ${d.toFixed(4)} (${bps.toFixed(1)} bp, MC noise) \u00b7 ${fast} ${ratio.toFixed(1)}\u00d7 faster`;
   } else if(py||ko){ const w=py||ko; mm.className=''; mm.textContent=`${w.engine} \u00b7 ${w.ms.toFixed(0)} ms`; }
@@ -4647,9 +4647,9 @@ window.addEventListener('DOMContentLoaded', function() {
             if(eng==='k'&&SRV_HEALTH&&SRV_HEALTH.ok&&!SRV_HEALTH.k)eng='python';
             var cfg = buildConfig();
 
-            setStatus('1/4 · Monte Carlo + solver + legs &amp; risk metrics — '+paths.toLocaleString()+' paths on the <b>'+(eng==='k'?'ngn/k native':'Python NumPy')+'</b> engine…',12); await frame();
+            var engLabel = (eng==='python')?'Python (NumPy)':'Amber (ngn/k)';
+            setStatus('1/4 · Monte Carlo + solver + legs &amp; risk metrics — '+paths.toLocaleString()+' paths on the <b>'+engLabel+'</b> engine…',12); await frame();
             var r = await srvFull(cfg, eng, paths, 2);
-            var engLabel = r.engine || (eng==='k'?'ngn/k':'python');
             var solveFor = cfg.platform['Solve for'];
             var info = {solveFor:solveFor, fair:(r.PV!=null?+r.PV:null),
                         solved:(solveFor==='Reoffer (%)' ? (r.PV!=null?+r.PV:null) : (r.Solved!=null?+r.Solved:null))};
@@ -4812,6 +4812,11 @@ window.addEventListener('DOMContentLoaded', function() {
 
   var METHOD="3";
   var lastR=null, busy=false, pend=null;
+  /* greek cache: margin-tab inputs never change the ticket greeks (they are the
+     slow part — ~11 bump-and-revalue MC sims). Cache them keyed by the ticket
+     signature and pass them back as margin.gcache so master.k skips the whole
+     pricer/greek pass and only re-runs the (fast) margin layer. ~50x faster. */
+  var mgGK=null;
   var GK=[], GKSORT={c:5,dir:-1};
 
   var COLL=[
@@ -5225,13 +5230,25 @@ window.addEventListener('DOMContentLoaded', function() {
     busy=true; chip("warn","computing…");
     var cfg; try{ cfg=JSON.parse(JSON.stringify(buildConfig())); }
     catch(e){ busy=false; chip("bad","bad ticket"); return; }
+    /* signature of the ticket only (greeks depend on this, not on margin inputs
+       or the notional override, both applied below). n_sims is excluded because
+       margin greeks are always priced at a fixed path count. */
+    var sig=null; try{ var _sc=JSON.parse(JSON.stringify(cfg)); delete _sc.n_sims; sig=JSON.stringify(_sc); }catch(e){}
     var ov=nOrNull("mgNotional"); if(ov!=null&&cfg.data) cfg.data.Notional=ov;
     cfg.margin=params();
+    var cacheHit=(mgGK&&sig!=null&&mgGK.sig===sig);
+    if(cacheHit) cfg.margin.gcache=mgGK.gk;   // fast path: skip greek recompute
     /* honour the pricing-engine selector: margin runs on whichever engine is
        chosen (Amber/Kona or Python). Offline builds map both to Amber WASM. */
     var esel=($("engineSel")&&$("engineSel").value==="python")?"python":"amber";
     srvPost("/margin?engine="+esel+"&d=2", srvCfg(cfg,10000))
-      .then(render)
+      .then(function(r){
+        if(!cacheHit&&sig!=null&&r&&r.greeks){
+          var g=r.greeks;
+          mgGK={sig:sig, gk:{delta:g.delta,gamma:g.gamma,vega:g.vega,rho:g.rho,theta:g.theta,per_asset:g.per_asset}};
+        }
+        render(r);
+      })
       .catch(function(e){ chip("bad",String(e.message||e).slice(0,58));
                           $("mgIMsub").textContent=String(e.message||e); })
       .then(function(){ busy=false; });

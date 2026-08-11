@@ -1,0 +1,11 @@
+# --- API server (required) ---
+flask==3.0.3
+flask-cors==4.0.1
+gunicorn==22.0.0
+
+# --- Python baseline engine (engine.py): powers the /margin endpoint and the
+#     automatic fallback when the native Amber binary is unavailable. Drop these
+#     three if you want a minimal image that ONLY serves the native ngn/k engine. ---
+numpy>=1.26
+scipy>=1.11
+pandas>=2.1

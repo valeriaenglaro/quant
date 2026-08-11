@@ -1,0 +1,16 @@
+# Render.com Blueprint (Infrastructure-as-Code).
+# On git push, Render reads this file and (re)creates the web service.
+# Docs: https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: quantsuite-api
+    runtime: docker            # `env: docker` also works on older Render accounts
+    plan: free
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health   # Render pings this; keeps the free instance warm-checked
+    autoDeployTrigger: commit  # redeploy automatically on push to the tracked branch
+    envVars:
+      - key: ALLOW_ALL_ORIGINS
+        value: "0"             # set to "1" to accept POSTs from any origin (open demo)
+      # PORT is provided by Render automatically — do not set it here.

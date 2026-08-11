@@ -1,0 +1,59 @@
+{
+  "platform": {
+    "Solve for": "Coupon (%)",
+    "Issue Price (%)": 100,
+    "Reoffer (%)": 99.5,
+    "Issuer Margin (%)": 1.5
+  },
+  "data": {
+    "Underlying": [
+      "MSFT US"
+    ],
+    "Spot Price": [
+      357.12
+    ],
+    "Basket Type": "None",
+    "Notional": 1000000,
+    "Tenor": "1Y",
+    "Days": 365,
+    "Volatility": [
+      0.34
+    ],
+    "Skew Beta": [
+      0.1
+    ],
+    "Risk-Free Rate": 0.0398,
+    "Barrier Type": "European (Maturity)",
+    "KI Barrier (%)": 60,
+    "Put Strike (%)": 100,
+    "Leverage (%)": "Yes",
+    "One Star": "No",
+    "One Star Level (%)": 100,
+    "Capital Guaranteed": "No",
+    "Dividends": [
+      {
+        "underlying_idx": 0,
+        "amount": 0,
+        "days_to_pay": 20
+      }
+    ]
+  },
+  "coupon_config": {
+    "Coupon Type": "Conditional with Memory",
+    "Coupon Barrier Level (%)": 70,
+    "Coupon Frequency": "Quarterly",
+    "Coupon (%)": ""
+  },
+  "Autocall": {
+    "Type": "Constant Barrier",
+    "Autocall Frequency": "Quarterly",
+    "Autocallable From": "Q1",
+    "Autocall Barrier (%)": 100,
+    "Step Up / Down (%)": 0
+  },
+  "Autocall_Coupon": {
+    "Autocall Coupon Type": "None",
+    "AC Coupon (%)": 0
+  },
+  "n_sims": 10000
+}

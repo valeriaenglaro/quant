@@ -1291,57 +1291,16 @@ if __name__ == "__main__":
 # ############################################################################
 # ############################################################################
 # ##                                                                        ##
-# ##   MARGIN  (append-only section -- nothing above this line is touched)  ##
+# ##  MARGIN  (append-only section -- nothing above this line is touched)   ##
 # ##                                                                        ##
 # ############################################################################
 # ############################################################################
-#
-# Initial Margin e gestione del collaterale.
-#
-# CONTRATTO COL SERVER
-#   server.py  ->  PYENG.compute_margin(base, cfg, cfg.get("margin", {}))
-#   dove `base` e' il dict ritornato da run() (PV, greeks, risk, dist, legs).
-#   Nessun global di engine.py viene letto o scritto: la sezione e' pura.
-#
-# UNITA' DI MISURA  (identiche a quelle prodotte da compute_greeks_*)
-#   delta  : % di nozionale per 1 punto percentuale di spot
-#   gamma  : % di nozionale per (1 punto percentuale)^2   [differenza seconda]
-#   vega   : % di nozionale per 1 punto di volatilita'    [+0.01 assoluto]
-#   rho    : % di nozionale per 1 bp di tasso
-#   theta  : % di nozionale per 1 giorno di calendario
-#   charge / im_pct : % di nozionale
-#
-# METODI
-#   "1" Schedule    -- % flat sul nozionale. Fallback e floor.
-#   "2" Sensitivity -- greche x moltiplicatori. Le gambe si SOMMANO: nessuna
-#                      correlazione fra fattori, nessun beneficio di
-#                      diversificazione. E' l'aggregazione peggior-caso, quindi
-#                      non richiede di stimare una matrice di correlazione e
-#                      non puo' sotto-marginare per errore di stima.
-#   "3" Monte Carlo -- VaR / Expected Shortfall sull'espansione di Taylor.
-#                      Spot e vol sono correlati via Cholesky con coefficiente
-#                      rho_spot_vol, parametro d'ingresso dell'utente (default
-#                      0.0 = indipendenti). Il tasso resta indipendente.
-#                      Lo scarto fra i due metodi e'
-#                      esposto in taylor_error_pct.
-#
-# ATTENZIONE: il metodo "2" NON e' un limite superiore del metodo "3".
-# Misurato su 9.148 combinazioni casuali: mediana 1.07x, ma il metodo 2 sta
-# sotto il 3 nel 41% dei casi (p05 0.43x). Due ragioni, entrambe strutturali:
-#   - il VaR non e' subadditivo, quindi la somma dei quantili di gamba non
-#     domina il quantile della somma;
-#   - la carica gamma del metodo 2 usa 1/2*m_delta^2, cioe' il quantile di ds
-#     al quadrato, mentre nella coda del P&L TOTALE lo shock che comanda e'
-#     piu' estremo del quantile di ds preso da solo.
-# Se serve un numero garantito conservativo, si accende use_schedule_floor
-# oppure si prende il massimo fra i due metodi a valle.
 
 MG_BUSINESS_DAYS = 252.0
 
-
-# Inverse standard-normal CDF (Acklam's rational approximation, |rel err| < 1.15e-9).
-# Shared verbatim with master.k so the margin z-quantile is bit-identical across
-# both engines -- scipy.norm.ppf is machine-precision but not reproducible in k.
+# Inverse standard-normal CDF (Acklam's rational approximation).
+# Used to compute the z-quantile without relying on external libraries (like scipy),
+# guaranteeing bit-exact reproducible results across different engines.
 _MG_PPF_A = (-3.969683028665376e+01, 2.209460984245205e+02, -2.759285104469687e+02,
              1.383577518672690e+02, -3.066479806614716e+01, 2.506628277459239e+00)
 _MG_PPF_B = (-5.447609879822406e+01, 1.615858368580409e+02, -1.556989798598866e+02,
@@ -1353,6 +1312,7 @@ _MG_PPF_D = (7.784695709041462e-03, 3.224671290700398e-01, 2.445134137142996e+00
 
 
 def _mg_ppf(p):
+    # Quantile function for standard normal distribution
     a, b, c, d = _MG_PPF_A, _MG_PPF_B, _MG_PPF_C, _MG_PPF_D
     if p <= 0.0:
         return -1e18
@@ -1373,17 +1333,18 @@ def _mg_ppf(p):
 
 
 def _mg_f(x, default=0.0):
-    """Float empty-safe: '' / None / non numerico -> default. Mai eccezioni."""
+    # Safe float conversion. Returns default for None, empty strings, or NaN.
     if x is None or x == "":
         return default
     try:
         v = float(x)
     except (TypeError, ValueError):
         return default
-    return default if v != v else v            # NaN -> default
+    return default if v != v else v
 
 
 def _mg_bool(x, default=False):
+    # Safe boolean conversion. Maps string values like "1", "yes", "true" to True.
     if x is None:
         return default
     if isinstance(x, str):
@@ -1391,22 +1352,11 @@ def _mg_bool(x, default=False):
     return bool(x)
 
 
-# =====================================================================
-# 1. GRECHE DI PORTAFOGLIO
-# =====================================================================
 def mg_net_greeks(greeks, net_delta=True):
-    """Greche nette di portafoglio, in % di nozionale.
-
-    Unico punto in cui si leggono le greche: metodo 2, metodo 3 e stress grid
-    passano di qui, quindi non possono divergere.
-
-    delta_per_asset (basket) NON viene sommato con un beneficio di
-    correlazione. Due modalita', entrambe prive di parametri stimati:
-      net_delta=True  -> |somma dei delta|      (netting pieno fra sottostanti)
-      net_delta=False -> somma dei |delta|      (lordo, peggior caso rho=1)
-    Il segno riportato e' quello dell'esposizione netta, cosi' il termine
-    gamma e il theta restano coerenti nell'espansione di Taylor.
-    """
+    # Aggregates portfolio Greeks.
+    # If net_delta=True: computes algebraic sum (full netting across underlyings).
+    # If net_delta=False: computes sum of absolute deltas (worst-case scenario).
+    # Sign is preserved for consistent Taylor expansion later.
     g = greeks or {}
     per = g.get("delta_per_asset")
     if isinstance(per, (list, tuple)) and len(per) > 1:
@@ -1429,22 +1379,12 @@ def mg_net_greeks(greeks, net_delta=True):
             "n_factors": n_factors}
 
 
-# =====================================================================
-# 2. MOLTIPLICATORI E DISTRIBUZIONE DEGLI SHOCK
-# =====================================================================
 def mg_multipliers(risk_vol, mpor_days, conf_pct, vol_of_vol=0.9,
                    rate_vol_bp=100.0, rho_spot_vol=0.0, n_sims=100000, seed=0):
-    """Moltiplicatori analitici + distribuzione congiunta degli shock.
-
-    - spot e volatilita' sono lognormali: la vol resta sempre positiva.
-    - correzione di martingala -0.5*s^2 su entrambi (E[shock] = 0).
-    - spot e vol sono correlati con coefficiente rho_spot_vol, imposto con la
-      decomposizione di Cholesky del blocco 2x2 [[1,rho],[rho,1]], che per due
-      fattori si riduce a  X1 = rho*Z0 + sqrt(1-rho^2)*Z1  (X0 = Z0).
-      rho e' un input dell'utente: rho<0 riproduce lo skew azionario (spot giu'
-      -> vol su'), rho=0 lascia i due fattori indipendenti.
-    - il tasso resta indipendente dagli altri due.
-    """
+    # Shock Distributions Model:
+    # Spot and Vol are Lognormal, correlated via Cholesky decomposition.
+    # Rates are Normal and independent. Both have martingale correction (-0.5*s^2).
+    
     risk_vol = max(_mg_f(risk_vol, 0.25), 1e-6)
     mpor_days = max(_mg_f(mpor_days, 10.0), 0.5)
     conf_pct = min(max(_mg_f(conf_pct, 99.0), 50.001), 99.999)
@@ -1453,30 +1393,32 @@ def mg_multipliers(risk_vol, mpor_days, conf_pct, vol_of_vol=0.9,
     rho_sv = min(max(_mg_f(rho_spot_vol, 0.0), -0.999), 0.999)
     n_sims = max(int(_mg_f(n_sims, 100000)), 2000)
 
-    h = mpor_days / MG_BUSINESS_DAYS               # orizzonte in anni
-    z = _mg_ppf(conf_pct / 100.0)                  # quantile normale (Acklam, k-portabile)
-    s_spot = risk_vol * math.sqrt(h)               # dev.std log-spot
-    s_vol = vol_of_vol * math.sqrt(h)              # dev.std log-vol
+    # Time horizon and standard deviations
+    h = mpor_days / MG_BUSINESS_DAYS               
+    z = _mg_ppf(conf_pct / 100.0)                  
+    s_spot = risk_vol * math.sqrt(h)               
+    s_vol = vol_of_vol * math.sqrt(h)              
 
-    # --- moltiplicatori analitici (quelli mostrati e modificabili nella UI) ---
+    # 1. Analytical Multipliers (Formula: Shift = exp(z*s - 0.5*s^2) - 1)
+    # Used for Method 2 (Sensitivity Margin)
     m_delta = (math.exp(z * s_spot - 0.5 * s_spot ** 2) - 1.0) * 100.0
     m_vega = risk_vol * (math.exp(z * s_vol - 0.5 * s_vol ** 2) - 1.0) * 100.0
-    m_gamma = 0.5 * m_delta ** 2                   # coerente con 1/2 * G * ds^2
-    m_rho = z * rate_vol_bp * math.sqrt(h)         # bp
+    m_gamma = 0.5 * m_delta ** 2                   
+    m_rho = z * rate_vol_bp * math.sqrt(h)         
 
-    # --- distribuzione Monte Carlo -----------------------------------------
-    # Cholesky sul blocco spot-vol: [[1, rho], [rho, 1]] = L L^T con
-    # L = [[1, 0], [rho, sqrt(1-rho^2)]], quindi X = L Z.
-    # (RNG CHANGE) stream portabile _QSRng (Lehmer LCG + Box-Muller), identico a
-    # master.k: qt reset a es=42+seed, poi 3*n_sims normali flat -> Z0|Z1|Z2. Cosi'
-    # il Monte Carlo del margine e' bit-identico fra engine.py e Amber.
+    # 2. Monte Carlo Vectors (Used for Method 3)
+    # Cholesky decomposition block for spot/vol: 
+    # X0 = Z0, X1 = rho * Z0 + sqrt(1 - rho^2) * Z1
     es = 42 + int(_mg_f(seed, 0))
     flat = _QSRng(es).normal(1, 3 * n_sims)[0]
     Z0 = flat[0:n_sims]
     Z1 = flat[n_sims:2 * n_sims]
     Z2 = flat[2 * n_sims:3 * n_sims]
+    
     X0 = Z0
     X1 = rho_sv * Z0 + math.sqrt(1.0 - rho_sv ** 2) * Z1
+    
+    # Generate shocked vectors (ds: spot, dv: vol, dr: rate)
     ds = (np.exp(s_spot * X0 - 0.5 * s_spot ** 2) - 1.0) * 100.0
     dv = risk_vol * (np.exp(s_vol * X1 - 0.5 * s_vol ** 2) - 1.0) * 100.0
     dr = rate_vol_bp * math.sqrt(h) * Z2
@@ -1495,11 +1437,9 @@ def mg_multipliers(risk_vol, mpor_days, conf_pct, vol_of_vol=0.9,
             "conf_pct": conf_pct, "n_sims": n_sims, "seed": int(_mg_f(seed, 0))}
 
 
-# =====================================================================
-# 3. METODO 1 -- SCHEDULE (FLAT RATE)
-# =====================================================================
 def mg_margin_schedule(notional, rate_pct):
-    """Margine flat standard sul nozionale. Usato anche come floor."""
+    # METHOD 1: Flat rate schedule margin. 
+    # Formula: IM = Notional * Fixed_Rate_Pct
     rate_pct = max(_mg_f(rate_pct, 8.0), 0.0)
     return {"im_pct": rate_pct,
             "im_amount": rate_pct / 100.0 * _mg_f(notional),
@@ -1508,18 +1448,12 @@ def mg_margin_schedule(notional, rate_pct):
                        "charged": True}]}
 
 
-# =====================================================================
-# 4. METODO 2 -- SENSITIVITY (GRECHE x MOLTIPLICATORI)
-# =====================================================================
 def mg_margin_sensitivity(gk, mult, ignore_pos_gamma=True, ignore_pos_vega=True,
                           weights=None):
-    """Carica ogni greca al proprio shock e SOMMA le gambe.
-
-    Regola di asimmetria: una greca lunga (gamma o vega positivi) puo' solo
-    aiutare il cliente, quindi la sua gamba viene azzerata invece di generare
-    un credito. Disattivando il flag il credito viene riconosciuto.
-    Theta: si carica solo il carry negativo, mai si accredita quello positivo.
-    """
+    # METHOD 2: Sensitivity-based Margin.
+    # Formula: IM = sum( |Greek| * Multiplier )
+    # Assumes worst-case correlation across all factors (sum of absolute values).
+    
     w = dict(weights or {})
     m_d = _mg_f(w.get("m_delta"), mult["m_delta"])
     m_g = _mg_f(w.get("m_gamma"), mult["m_gamma"])
@@ -1530,45 +1464,36 @@ def mg_margin_sensitivity(gk, mult, ignore_pos_gamma=True, ignore_pos_vega=True,
     delta, gamma, vega = gk["delta"], gk["gamma"], gk["vega"]
     rho, theta = gk["rho"], gk["theta"]
 
+    # Positive gamma/vega helps the client, so we zero out their charge to prevent margin credits.
+    # Theta is only charged if the carry is negative.
     drop_g = gamma > 0.0 and ignore_pos_gamma
     drop_v = vega > 0.0 and ignore_pos_vega
     theta_charge = max(-theta * days, 0.0)
 
     lines = [
-        {"factor": "delta", "greek": delta, "mult": m_d,
-         "charge": abs(delta) * m_d, "charged": True},
-        {"factor": "gamma", "greek": gamma, "mult": m_g,
-         "charge": 0.0 if drop_g else -gamma * m_g, "charged": not drop_g},
-        {"factor": "vega", "greek": vega, "mult": m_v,
-         "charge": 0.0 if drop_v else -vega * m_v, "charged": not drop_v},
-        {"factor": "rho", "greek": rho, "mult": m_r,
-         "charge": abs(rho) * m_r, "charged": True},
-        {"factor": "theta", "greek": theta, "mult": days,
-         "charge": theta_charge, "charged": theta_charge > 0.0},
+        {"factor": "delta", "greek": delta, "mult": m_d, "charge": abs(delta) * m_d, "charged": True},
+        {"factor": "gamma", "greek": gamma, "mult": m_g, "charge": 0.0 if drop_g else -gamma * m_g, "charged": not drop_g},
+        {"factor": "vega", "greek": vega, "mult": m_v, "charge": 0.0 if drop_v else -vega * m_v, "charged": not drop_v},
+        {"factor": "rho", "greek": rho, "mult": m_r, "charge": abs(rho) * m_r, "charged": True},
+        {"factor": "theta", "greek": theta, "mult": days, "charge": theta_charge, "charged": theta_charge > 0.0},
     ]
     total = sum(l["charge"] for l in lines)
     return {"im_pct": max(total, 0.0), "gross_pct": total, "lines": lines,
             "dropped": {"gamma": drop_g, "vega": drop_v}}
 
 
-# =====================================================================
-# 5. METODO 3 -- MONTE CARLO VaR / EXPECTED SHORTFALL + ATTRIBUTION
-# =====================================================================
 def mg_margin_var(gk, mult, measure="var", ignore_pos_gamma=True,
                   ignore_pos_vega=True, ignore_pos_theta=True, hist_bins=44):
-    """P&L scenario per scenario con l'espansione di Taylor, poi VaR o ES.
-
-    P&L_i = D*ds_i + 1/2*G*ds_i^2 + V*dv_i + R*dr_i + Theta*h
-    La coda e' individuata sul P&L TOTALE e la stessa maschera e' applicata a
-    ogni gamba: l'attribuzione di Eulero e' quindi esattamente additiva.
-    """
+    # METHOD 3: Monte Carlo VaR / Expected Shortfall using Taylor Expansion.
+    # Formula: P&L = Delta*ds + 0.5*Gamma*ds^2 + Vega*dv + Rho*dr + Theta*h
+    
     measure = "es" if str(measure).lower() == "es" else "var"
     ds, dv, dr = mult["ds"], mult["dv"], mult["dr"]
     delta, gamma, vega = gk["delta"], gk["gamma"], gk["vega"]
     rho, theta = gk["rho"], gk["theta"]
 
-    # asimmetria applicata PRIMA del quantile: azzerarla dopo romperebbe
-    # l'additivita' dell'attribuzione.
+    # Apply asymmetry flags before computing the portfolio P&L tail.
+    # This guarantees exact additivity for the Euler risk attribution later.
     drop_g = gamma > 0.0 and ignore_pos_gamma
     drop_v = vega > 0.0 and ignore_pos_vega
 
@@ -1576,22 +1501,24 @@ def mg_margin_var(gk, mult, measure="var", ignore_pos_gamma=True,
     pnl_gamma = np.zeros_like(ds) if drop_g else 0.5 * gamma * (ds ** 2)
     pnl_vega = np.zeros_like(dv) if drop_v else vega * dv
     pnl_rho = rho * dr
-    # (fix) il carry sull'MPOR e' deterministico: se e' favorevole non lo si
-    # accredita. Su un autocall lungo theta e' positivo (pull-to-par + rateo) e
-    # senza questo floor abbassava l'IM di theta*h -- la stessa cosa che la
-    # regola di asimmetria vieta per gamma e vega.
+
+    # Theta carry is deterministic. If positive, zero it out to avoid margin reduction.
     carry = theta * mult["mpor_days"]
     if ignore_pos_theta and carry > 0.0:
         carry = 0.0
     pnl_theta = np.full_like(ds, carry)
+    
+    # Total Portfolio P&L
     pnl = pnl_delta + pnl_gamma + pnl_vega + pnl_rho + pnl_theta
 
+    # Extract Value at Risk (VaR) / Expected Shortfall (ES) tail
     conf = mult["conf_pct"]
     cut = float(np.percentile(pnl, 100.0 - conf))
     tail = pnl <= cut
     var = -cut
     es = float(-pnl[tail].mean()) if tail.any() else var
 
+    # Euler Attribution: Expected shortfall of each factor conditional to the total P&L tail
     attr = {"delta": float(-pnl_delta[tail].mean()) if tail.any() else 0.0,
             "gamma": float(-pnl_gamma[tail].mean()) if tail.any() else 0.0,
             "vega": float(-pnl_vega[tail].mean()) if tail.any() else 0.0,
@@ -1603,10 +1530,6 @@ def mg_margin_var(gk, mult, measure="var", ignore_pos_gamma=True,
         hi = lo + 1.0
     counts, _ = np.histogram(pnl, bins=int(hist_bins), range=(lo, hi))
 
-    # (fix) im_pct e' un requisito e va floorato a zero; var_pct/es_pct sono
-    # misure di rischio e possono essere negative (coda in guadagno). Floorando
-    # anche loro, attribution_total restava negativo mentre es_pct andava a 0 e
-    # il check di additivita' di Eulero mostrava "-1.88% = 0.00%".
     return {"im_pct": max(es if measure == "es" else var, 0.0),
             "var_pct": var, "es_pct": es,
             "var95": float(-np.percentile(pnl, 5.0)),
@@ -1620,21 +1543,20 @@ def mg_margin_var(gk, mult, measure="var", ignore_pos_gamma=True,
                      "counts": counts.tolist(), "cut": cut}}
 
 
-# =====================================================================
-# 6. ANALISI DI STRESS -- GRID / HEATMAP (SPOT vs VOL)
-# =====================================================================
 def mg_stress_grid(gk, spot_grid_pct=None, vol_grid_pts=None, notional=None):
-    """Matrice deterministica N x M di P&L. Diagnostica, non un metodo di
-    margine: mostra l'economia vera, incluso il beneficio che il margine
-    sceglie di non riconoscere, sugli stessi shock del Monte Carlo."""
+    # Deterministic Stress Matrix (Spot vs Volatility).
+    # Formula: P&L = Delta*S + 0.5*Gamma*S^2 + Vega*V
     if not spot_grid_pct:
         spot_grid_pct = [-30.0, -20.0, -10.0, -5.0, 0.0, 5.0, 10.0, 20.0]
     if not vol_grid_pts:
         vol_grid_pts = [-10.0, -5.0, 0.0, 5.0, 10.0, 20.0]
+        
     S, V = np.meshgrid(np.asarray(spot_grid_pct, dtype=float),
                        np.asarray(vol_grid_pts, dtype=float))
+    
     pnl = gk["delta"] * S + 0.5 * gk["gamma"] * (S ** 2) + gk["vega"] * V
     i, j = np.unravel_index(int(np.argmin(pnl)), pnl.shape)
+    
     out = {"spot_shocks_pct": list(spot_grid_pct),
            "vol_shocks_pts": list(vol_grid_pts),
            "pnl_grid": pnl.tolist(),
@@ -1646,18 +1568,13 @@ def mg_stress_grid(gk, spot_grid_pct=None, vol_grid_pts=None, notional=None):
     return out
 
 
-# =====================================================================
-# 7. COLLATERALE -- VALUTAZIONE E RETTIFICHE
-# =====================================================================
 def mg_collateral_line(assets, conc_pct=25.0, excess_haircut_pct=30.0):
-    """Sequenza rigorosa e non commutativa: LTV -> Cap Concentrazione -> Haircut.
-
-    Il cap si misura per EMITTENTE (campo "group", default "name"), non per
-    riga: altrimenti la stessa esposizione economica spezzata su piu' righe
-    risulterebbe diversificata. L'eccedenza sopra il cap non viene esclusa ma
-    riceve un haircut addizionale: un pool concentrato ma di ottima qualita'
-    resta utilizzabile. Cassa e governativi possono essere marcati "exempt".
-    """
+    # Valuation pipeline step-by-step:
+    # 1. Apply Base LTV (Loan-To-Value)
+    # 2. Group exposure by Issuer ("group")
+    # 3. Apply Concentration Cap per Issuer (exceeding amounts are not excluded but penalized)
+    # 4. Apply extra Excess Haircut to the exceeding amount.
+    
     assets = list(assets or [])
     total_mv = sum(_mg_f(a.get("market")) for a in assets)
     if total_mv <= 0:
@@ -1667,7 +1584,7 @@ def mg_collateral_line(assets, conc_pct=25.0, excess_haircut_pct=30.0):
     cap = total_mv * max(_mg_f(conc_pct, 25.0), 0.0) / 100.0
     xh = min(max(_mg_f(excess_haircut_pct, 30.0), 0.0), 100.0) / 100.0
 
-    # esposizione aggregata per emittente, dopo LTV e prima del cap
+    # Step 2: Aggregate issuer exposure post-LTV
     grp = {}
     for a in assets:
         k = a.get("group") or a.get("name") or ""
@@ -1676,16 +1593,21 @@ def mg_collateral_line(assets, conc_pct=25.0, excess_haircut_pct=30.0):
 
     rows, eligible = [], 0.0
     for a in assets:
+        # Step 1: Base LTV
         mv = _mg_f(a.get("market"))
         after_ltv = mv * _mg_f(a.get("ltv_pct"), 100.0) / 100.0
         g = grp.get(a.get("group") or a.get("name") or "", 0.0)
+        
+        # Step 3 & 4: Concentration cap and excess haircut penalization
         if _mg_bool(a.get("exempt")) or g <= cap or after_ltv <= 0 or cap <= 0:
             factor = 1.0
         else:
             factor = (cap + (g - cap) * (1.0 - xh)) / g
+            
         after_conc = after_ltv * factor
         haircut = after_conc * _mg_f(a.get("haircut_pct")) / 100.0
         elig = after_conc - haircut
+        
         eligible += elig
         rows.append({"name": a.get("name", ""), "ccy": a.get("ccy", ""),
                      "group": a.get("group") or a.get("name", ""),
@@ -1693,21 +1615,14 @@ def mg_collateral_line(assets, conc_pct=25.0, excess_haircut_pct=30.0):
                      "market": mv, "after_ltv": after_ltv, "factor": factor,
                      "after_conc": after_conc, "haircut": haircut,
                      "eligible": elig})
+                     
     return {"rows": rows, "total_market": total_mv, "cap": cap,
             "margin_line": float(eligible), "conc_pct": _mg_f(conc_pct, 25.0),
             "excess_haircut_pct": _mg_f(excess_haircut_pct, 30.0)}
 
 
-# =====================================================================
-# 8. ORCHESTRATORE CENTRALE  (entry point del server)
-# =====================================================================
 def compute_margin(result, cfg, params=None):
-    """Orchestratore della pagina Margin.
-
-    result : output di run() (serve greeks e, se disponibile, PV)
-    cfg    : stesso config passato a run()
-    params : cfg["margin"], tutto opzionale, i default sono quelli della UI
-    """
+    # Main Orchestrator for Margin Calculation
     p = dict(params or {})
     result = result or {}
     data = cfg.get("data", {}) if isinstance(cfg, dict) else {}
@@ -1717,7 +1632,6 @@ def compute_margin(result, cfg, params=None):
     if notional <= 0:
         raise ValueError("Nozionale mancante o non positivo")
 
-    # volatilita' di rischio: params vince su cfg, cosi' la pagina fa what-if
     vols = data.get("Volatility")
     cfg_vol = _mg_f(vols[0] if isinstance(vols, (list, tuple)) and vols else vols, 0.25)
     risk_vol = _mg_f(p.get("risk_vol"), cfg_vol)
@@ -1727,8 +1641,10 @@ def compute_margin(result, cfg, params=None):
     ig_vega = _mg_bool(p.get("ignore_pos_vega"), True)
     ig_theta = _mg_bool(p.get("ignore_pos_theta"), True)
 
+    # 1. Prepare Portfolio Greeks
     gk = mg_net_greeks(result.get("greeks") or {}, net_delta=net_delta)
 
+    # 2. Build distributions and multipliers
     mult = mg_multipliers(risk_vol=risk_vol,
                           mpor_days=p.get("mpor_days", 10.0),
                           conf_pct=p.get("conf_pct", 99.0),
@@ -1738,6 +1654,7 @@ def compute_margin(result, cfg, params=None):
                           n_sims=p.get("n_sims", 100000),
                           seed=p.get("seed", 0))
 
+    # 3. Calculate all three margin models independently
     m1 = mg_margin_schedule(notional, p.get("schedule_rate", 8.0))
     m2 = mg_margin_sensitivity(gk, mult, ignore_pos_gamma=ig_gamma,
                                ignore_pos_vega=ig_vega,
@@ -1748,31 +1665,29 @@ def compute_margin(result, cfg, params=None):
     grid = mg_stress_grid(gk, p.get("spot_grid_pct"), p.get("vol_grid_pts"),
                           notional)
 
+    # 4. Select the configured method
     method = str(p.get("method", "2"))
     if method not in ("1", "2", "3"):
         method = "2"
     gross = {"1": m1, "2": m2, "3": m3}[method]["im_pct"]
 
-    # Guardia: se il pricer non ha prodotto greche (run con greeks=0, oppure
-    # pricing fallito) i metodi 2 e 3 darebbero margine zero. In quel caso si
-    # ricade sulla schedule: un errore a monte non puo' azzerare il requisito.
+    # Safety Fallback: if pricer fails to provide greeks, Method 2 and 3 would yield 0. 
+    # Fallback to Method 1 (Schedule) in this scenario.
     greeks_missing = (method != "1" and
                       all(abs(gk[k]) < 1e-12 for k in ("delta", "gamma", "vega",
                                                        "rho", "theta")))
     if greeks_missing:
         gross = m1["im_pct"]
 
-    # floor di schedule: il metodo quantitativo non puo' scendere sotto la
-    # tabella se il floor e' attivo (default off, si accende dalla UI).
+    # Apply Schedule Floor: Quantitative method cannot go below the flat rate table.
     floor_pct = 0.0
     if _mg_bool(p.get("use_schedule_floor"), False) and method != "1":
         floor_pct = m1["im_pct"]
         gross = max(gross, floor_pct)
 
-    # ---- MTM: variation margin, NON un netting contro la carica di rischio --
-    # Una perdita non realizzata aumenta il requisito. Un utile non realizzato
-    # non riduce il rischio prospettico: viene accreditato sulla linea di
-    # collaterale, e solo se il flag e' attivo.
+    # 5. Variation Margin (MTM Adjustment)
+    # Unrealized losses strictly increase the margin requirement.
+    # Unrealized gains only credit the collateral line, and only if "use_mtm" is True.
     mtm_pct = p.get("mtm_pct")
     if mtm_pct is None:
         prev = p.get("previous_mark")
@@ -1780,28 +1695,27 @@ def compute_margin(result, cfg, params=None):
         if prev is not None or curr is not None:
             mtm_pct = _mg_f(curr, 100.0) - _mg_f(prev, 100.0)
         else:
-            # (fix) NIENTE fallback su (PV - issue price): alla nascita il PV sta
-            # sotto il prezzo di emissione per il margine d'emittente e la fee di
-            # collocamento, non per una perdita di mercato. Usarlo come MTM
-            # caricava variation margin sul fee gia' pagato dal cliente.
-            # Il MTM va passato esplicitamente (params["mtm_pct"]) oppure dedotto
-            # dai due mark; in mancanza di entrambi vale zero.
             par = p.get("par")
             pv = result.get("PV")
             mtm_pct = (_mg_f(pv) - _mg_f(par)) if (pv is not None and par) else 0.0
+            
     mtm_pct = _mg_f(mtm_pct)
     vm_pct = -mtm_pct if mtm_pct < 0.0 else 0.0
     mtm_credit = max(mtm_pct, 0.0) if _mg_bool(p.get("use_mtm"), False) else 0.0
 
+    # Total Initial Margin, Maintenance Margin, and Closeout Margin
     im = max(gross, 0.0) + vm_pct
     mm = im * _mg_f(p.get("mm_mult"), 0.90)
     cm = im * _mg_f(p.get("cm_mult"), 0.80)
 
+    # 6. Evaluate Collateral Pipeline
     coll = mg_collateral_line(p.get("collateral", []),
                               p.get("conc_pct", 25.0),
                               p.get("excess_haircut_pct", 30.0))
+                              
     line_pct = coll["margin_line"] / notional * 100.0 + mtm_credit
 
+    # 7. Determine Account Status
     if line_pct < cm:
         status = "liquidate"
     elif line_pct < mm:
@@ -1811,6 +1725,7 @@ def compute_margin(result, cfg, params=None):
     else:
         status = "hold"
 
+    # Diagnostics: Error gap between Sensitivity (Method 2) and VaR (Method 3)
     ref = m3["im_pct"] if m3["im_pct"] > 1e-9 else float("nan")
     taylor_error = (m2["im_pct"] - m3["im_pct"]) / ref * 100.0 if ref == ref else 0.0
 

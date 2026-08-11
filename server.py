@@ -253,6 +253,8 @@ def price(cfg, engine="amber", detail=1):
     """detail/greeks: 0 legs+risk only, 1 +basket greeks, 2 +per-asset greeks.
     Native Amber maps this to master.k's greeks flag (1/2/3)."""
     cfg = copy.deepcopy(cfg)
+    cfg.pop("margin", None)          # pricing is margin-agnostic: a `margin` key
+                                     # would make master.k emit the margin dict
     d = int(detail)
     want_native = str(engine).lower() in ("amber", "k", "native", "ngnk", "ngn/k")
     if want_native and AMBER_BIN and _AMBER_OK:
@@ -334,12 +336,22 @@ def compat_price():
 
 @app.post("/margin")
 def compat_margin():
-    if not PY_OK:
-        return jsonify({"error": "python engine required for margin"}), 500
     body = request.get_json(force=True, silent=True) or {}
     cfg = body if "platform" in body else build_config(body)
+    engine = request.args.get("engine", "amber")
+    want_native = str(engine).lower() in ("amber", "k", "native", "ngnk", "ngn/k")
     try:
-        base = price(copy.deepcopy(cfg), request.args.get("engine", "python"), max(1, int(request.args.get("d", "2"))))
+        # Margin now runs natively in Amber (master.k) as well as in engine.py,
+        # with a bit-for-bit identical JSON contract. Route to whichever the
+        # caller selected; fall back to the other engine if it is unavailable.
+        if want_native and AMBER_BIN and _AMBER_OK:
+            mcfg = copy.deepcopy(cfg)
+            mcfg["greeks"] = 3                       # margin needs full greeks
+            mcfg.setdefault("margin", cfg.get("margin", {}))
+            return jsonify(run_amber(mcfg))          # master.k emits the margin dict
+        if not PY_OK:
+            return jsonify({"error": "no engine available for margin"}), 500
+        base = price(copy.deepcopy(cfg), "python", max(1, int(request.args.get("d", "2"))))
         return jsonify(PYENG.compute_margin(base, cfg, cfg.get("margin", {})))
     except Exception as e:
         return jsonify({"error": str(e)}), 500

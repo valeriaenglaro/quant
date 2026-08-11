@@ -2930,11 +2930,19 @@ async function srvHealth(){
   return SRV_HEALTH;
 }
 async function srvPost(path,cfg){
-  if(String(path).indexOf('/margin')===0)
-    throw new Error('Margin analytics require the Python engine and are not available in the offline WASM build.');
   await _amberReady();
   const t0=performance.now();
-  const c=JSON.parse(JSON.stringify(cfg)); if(c.greeks==null)c.greeks=1;
+  const c=JSON.parse(JSON.stringify(cfg));
+  if(String(path).indexOf('/margin')===0){
+    /* Margin & Collateral now runs natively in Amber (master.k detects the
+       `margin` sub-dict, computes greeks + IM/MM/CM/VM + collateral, and returns
+       the same JSON contract as engine.py). Fully offline via WASM; works for
+       both Amber and Python engine selections. */
+    if(c.greeks==null) c.greeks=3;
+    const jm=window.AmberWASM.runAmberPricing(c);
+    jm.wall_ms=performance.now()-t0; return jm;
+  }
+  if(c.greeks==null)c.greeks=1;
   const j=window.AmberWASM.runAmberPricing(c);
   j.wall_ms=performance.now()-t0; return j;
 }
@@ -4822,7 +4830,7 @@ window.addEventListener('DOMContentLoaded', function() {
   var n0=function(id,d){ var e=$(id); var v=e?parseFloat(e.value):NaN; return isNaN(v)?d:v; };
   var nOrNull=function(id){ var e=$(id); if(!e||e.value==="")return null;
                             var v=parseFloat(e.value); return isNaN(v)?null:v; };
-  var ck=function(id){ var e=$(id); return e?!!e.checked:false; };
+  var ck=function(id){ var e=$(id); return (e&&e.checked)?1:0; };  /* 1/0 so the Amber (k) JSON reader and engine.py agree */
   var list=function(id,fb){ var e=$(id); if(!e) return fb;
     var a=String(e.value).split(/[,;\s]+/).map(parseFloat).filter(function(x){return isFinite(x);});
     return a.length?a:fb; };
@@ -4893,7 +4901,11 @@ window.addEventListener('DOMContentLoaded', function() {
       conc_pct:n0("mgConc",25), excess_haircut_pct:n0("mgXhc",30),
       spot_grid_pct:list("mgGridS",[-30,-20,-10,-5,0,5,10,20]),
       vol_grid_pts:list("mgGridV",[-10,-5,0,5,10,20]),
-      collateral:COLL };
+      /* exempt as 1/0: Amber's k JSON reader has no native boolean; engine.py's
+         _mg_bool accepts 1/0 too, so both engines see the same collateral. */
+      collateral:COLL.map(function(a){
+        return {name:a.name,group:a.group,ccy:a.ccy,market:a.market,
+                ltv_pct:a.ltv_pct,haircut_pct:a.haircut_pct,exempt:a.exempt?1:0}; }) };
   }
 
   /* ------------------------------------------------ svg helpers */
@@ -5215,7 +5227,10 @@ window.addEventListener('DOMContentLoaded', function() {
     catch(e){ busy=false; chip("bad","bad ticket"); return; }
     var ov=nOrNull("mgNotional"); if(ov!=null&&cfg.data) cfg.data.Notional=ov;
     cfg.margin=params();
-    srvPost("/margin?engine=python&d=2", srvCfg(cfg,10000))
+    /* honour the pricing-engine selector: margin runs on whichever engine is
+       chosen (Amber/Kona or Python). Offline builds map both to Amber WASM. */
+    var esel=($("engineSel")&&$("engineSel").value==="python")?"python":"amber";
+    srvPost("/margin?engine="+esel+"&d=2", srvCfg(cfg,10000))
       .then(render)
       .catch(function(e){ chip("bad",String(e.message||e).slice(0,58));
                           $("mgIMsub").textContent=String(e.message||e); })
